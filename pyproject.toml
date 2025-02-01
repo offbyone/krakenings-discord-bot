@@ -9,6 +9,10 @@ dependencies = [
   "aiohttp~=3.11.11",
   "python-dateutil~=2.8.2",
   "nhl-stats-client>=1.0.0",
+  "click>=8.1.8",
+
+  # only require audioop-lts on Python 3.13 and higher.
+  'audioop-lts ; python_version>="3.13"'
 ]
 license = {text = "MIT"}
 
