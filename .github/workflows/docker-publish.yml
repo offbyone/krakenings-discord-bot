@@ -52,8 +52,7 @@ jobs:
       matrix:
         platform:
           - linux/amd64
-          # we don't run this on ARM, no sense in building for it
-          # - linux/arm64
+          - linux/arm64
     permissions:
       contents: read
       packages: write
