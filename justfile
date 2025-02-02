@@ -15,6 +15,12 @@ serve:
 build:
     uv build
 
+clean:
+    rm -rf dist/*
+
+publish: clean build
+    uvx twine upload dist/*
+
 build-docker:
     docker build -t ghcr.io/offbyone/krakenings-discord-bot:latest .
 
