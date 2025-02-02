@@ -36,33 +36,13 @@ ENV UV_LINK_MODE=copy \
 
 ### End Build Prep -- this is where your Dockerfile should start.
 
-# Since there's no point in shipping lock files, we move them
-# into a directory that is NOT copied into the runtime image.
-# The trailing slash makes COPY create `/_lock/` automagically.
-COPY pyproject.toml /_lock/
-COPY uv.lock /_lock/
-
-# Prepare a virtual environment.
-# This is cached until the Python version changes above.
-#
-# Note: This will not succeed if you are referencing nomnom's development version
-# unless you re-build the uv lock without sources and with prereleases.
-RUN --mount=type=cache,target=/root/.cache <<EOT
+RUN --mount=type=bind,source=.,target=/_lock <<EOT
 cd /_lock
 uv sync \
     --frozen \
     --no-dev \
     --no-sources \
-    --no-install-project
-EOT
-
-# Now install the APPLICATION from `/src` without any dependencies.
-# `/src` will NOT be copied into the runtime container.
-# LEAVE THIS OUT if your application is NOT a proper Python package.
-COPY . /src
-RUN --mount=type=cache,target=/root/.cache <<EOT
-cd /src
-uv sync --no-editable
+    --no-editable
 EOT
 
 ##########################################################################
@@ -79,7 +59,6 @@ groupadd -r app
 useradd -r -d /app -g app -N app
 EOT
 
-ENTRYPOINT ["/usr/bin/tini", "-v"]
 # See <https://hynek.me/articles/docker-signals/>.
 STOPSIGNAL SIGINT
 
@@ -102,7 +81,7 @@ EOT
 # and change the ownership to user app and group app in one step.
 COPY --from=build --chown=app:app /app /app
 
-VOLUME /staticfiles
+VOLUME /cache
 
 USER app
 WORKDIR /app
