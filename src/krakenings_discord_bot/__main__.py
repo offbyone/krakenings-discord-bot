@@ -1,13 +1,28 @@
 import asyncio
+import os
+from dataclasses import Field, dataclass
+from io import BytesIO
 from pathlib import Path
 
 import click
 import environ
+import httpx
 import tomli
 from rich import print
 
-from krakenings_discord_bot.espn import Schedule, TeamsModel, schedule_for_league
+from krakenings_discord_bot import init, svcs_from
+from krakenings_discord_bot.espn import (
+    Schedule,
+    TeamsModel,
+    fetch_image,
+    schedule_for_league,
+)
 from src.krakenings_discord_bot.bot import Bot
+
+
+@dataclass
+class AppConfig:
+    local: bool = False
 
 
 @environ.config()
@@ -23,42 +38,76 @@ class WebhookConfig:
 
 
 @click.group()
-def main(): ...
+@click.option("--local", is_flag=True, default=False)
+@click.pass_context
+def main(ctx, local):
+    ctx.obj = AppConfig(local=local)
+    init()
 
 
 @main.command()
 @click.option("--config-file", type=Path, default=Path("config.toml"))
-@click.option("--from-json", type=Path, default=None)
 @click.option("--send", is_flag=True, type=Path, default=False)
-def schedule(config_file: Path, from_json: Path | None, send: bool):
+@click.argument("sport")
+@click.argument("league")
+@click.pass_obj
+def schedule(obj: AppConfig, config_file: Path, sport: str, league: str, send: bool):
     app_config: WebhookConfig = WebhookConfig.from_environ()
     config = tomli.load(config_file.open(mode="rb"))
 
-    # testing
-    if from_json:
-        json_content = from_json.read_text()
-        print(Schedule.model_validate_json(json_content).events)
+    if obj.local:
+        path = Path("data") / f"espn-{sport}.json"
+        schedule = Schedule.model_validate_json(path.read_text())
+
     else:
-        schedule = asyncio.run(schedule_for_league("hockey", "nhl"))
-        print(repr(schedule))
+        schedule = schedule_for_league(sport, league)
+
+    print(schedule.events)
 
 
 @main.command()
-@click.option("--from-json", type=Path, default=None)
-def teams(from_json: Path | None):
-    # testing
-    if from_json:
-        json_content = from_json.read_text()
+@click.argument("sport")
+@click.argument("league")
+@click.pass_obj
+def teams(obj: AppConfig, sport: str, league: str):
+    if obj.local:
+        path = Path("data") / f"espn-{sport}-teams.json"
+        json_content = path.read_text()
         teams = TeamsModel.model_validate_json(json_content)
     else:
-        teams = asyncio.run(teams_for_league("hockey", "nhl"))
+        teams = teams_for_league(sport, league)
+
     print(repr(teams))
 
 
 @main.command()
+@click.argument("sport")
+@click.argument("league")
 @click.argument("team_a")
 @click.argument("team_b")
-def vs_logo(team_a: str, team_b: str): ...
+@click.pass_obj
+def vs_logo(obj: AppConfig, sport: str, league: str, team_a: str, team_b: str):
+    if obj.local:
+        path = Path("data") / f"espn-{sport}-teams.json"
+        json_content = path.read_text()
+        teams = TeamsModel.model_validate_json(json_content)
+    else:
+        teams = asyncio.run(teams_for_league(sport, league))
+
+    away_team = teams.get_team(team_a)
+    home_team = teams.get_team(team_b)
+
+    import PIL
+    from textual_image.renderable import Image
+
+    from .images import Dimensions, make_vs_image
+
+    home_team_logo = fetch_image(home_team.get_logo_url())
+    away_team_logo = fetch_image(away_team.get_logo_url())
+    print(Image(home_team_logo))
+    print(Image(away_team_logo))
+
+    print(Image(make_vs_image(home_team_logo, away_team_logo, Dimensions(800, 400))))
 
 
 @main.command()

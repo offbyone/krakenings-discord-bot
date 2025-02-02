@@ -19,6 +19,8 @@ dependencies = [
   "httpx>=0.28.1",
   "pydantic-extra-types>=2.10.2",
   "pillow>=11.1.0",
+  "numpy>=2.2.2",
+  "svcs>=25.1.0",
 ]
 license = {text = "MIT"}
 

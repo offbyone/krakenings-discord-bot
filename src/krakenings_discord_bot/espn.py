@@ -1,22 +1,17 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+from abc import abstractmethod
 from datetime import date, datetime
 from io import BytesIO
 from typing import List
 
 import httpx
 from discord import Color
-from PIL import Image, ImageDraw, ImageFont
-from pydantic import BaseModel, Field, HttpUrl, TypeAdapter
+from PIL import Image
+from pydantic import BaseModel, Field, HttpUrl
 from pydantic_extra_types.color import Color
 
-
-@dataclass
-class Dimensions:
-    width: int
-    height: int
+from .images import make_vs_image
 
 
 class Logo(BaseModel):
@@ -55,7 +50,7 @@ class WrappedTeam(BaseModel):
 
 
 class League(BaseLeague):
-    teams: list[WrappedTeam]
+    wrapped_teams: list[WrappedTeam] = Field(alias="teams")
 
 
 class ScheduleLeague(BaseLeague):
@@ -94,6 +89,7 @@ class Venue(BaseModel):
 class BaseTeam(BaseModel):
     id: str
     uid: str
+    abbreviation: str
     location: str
     name: str
     display_name: str = Field(alias="displayName")
@@ -101,13 +97,33 @@ class BaseTeam(BaseModel):
     color: Color | None = Field(default=None)
     alternate_color: Color | None = Field(alias="alternateColor", default=None)
 
+    @abstractmethod
+    def get_logo_url(self, specifier: list[str] | None = None) -> HttpUrl: ...
+
 
 class ScheduleTeam(BaseTeam):
     logo: HttpUrl
 
+    def get_logo_url(self, specifier: list[str] | None = None) -> HttpUrl:
+        return self.logo
+
 
 class Team(BaseTeam):
+    nickname: str
+    slug: str
     logos: list[Logo]
+
+    def get_logo_url(self, specifier: list[str] | None = None) -> HttpUrl:
+        if specifier is None:
+            return self.logos[0].href
+
+        specifier_str = ".".join(specifier)
+
+        for logo in self.logos:
+            if specifier_str == ".".join(logo.rel):
+                return logo.href
+
+        return self.logos[0].href
 
 
 class Competitor(BaseModel):
@@ -151,76 +167,54 @@ class Sport(BaseModel):
 class TeamsModel(BaseModel):
     sports: list[Sport]
 
+    def get_team(self, team_id: str) -> Team:
+        # get a flat least of teams from the sport / league / wrapped team structure:\
+        all_teams: dict[str, Team] = {}
+        for sport in self.sports:
+            for league in sport.leagues:
+                for wt in league.wrapped_teams:
+                    all_teams[wt.team.abbreviation.lower()] = wt.team
+                    all_teams[wt.team.slug.lower()] = wt.team
+
+        return all_teams[team_id]
+
 
 BASE_URL = "https://site.api.espn.com"
 
 
-async def schedule_for_league(sport: str, league: str) -> Schedule:
+def schedule_for_league(sport: str, league: str) -> Schedule:
     url = f"{BASE_URL}/apis/site/v2/sports/{sport}/{league}/scoreboard"
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        response.raise_for_status()
+    response = httpx.get(url)
+    response.raise_for_status()
 
     raw = response.read()
     return Schedule.model_validate_json(raw)
 
 
-async def team_for_league(sport: str, league: str) -> list[Team]:
+def team_for_league(sport: str, league: str) -> list[Team]:
     url = f"{BASE_URL}/apis/site/v2/sports/{sport}/{league}/teams"
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        response.raise_for_status()
+    response = httpx.get(url)
+    response.raise_for_status()
 
     raw = response.read()
     return TeamsModel.model_validate_json(raw).sports[0].leagues[0].teams
 
 
-async def fetch_image(url: HttpUrl) -> Image.Image:
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url)
-        response.raise_for_status()
+def fetch_image(url: HttpUrl) -> Image.Image:
+    response = httpx.get(str(url))
+    response.raise_for_status()
 
-    return Image.open(BytesIO(response.read())).convert("RGBA")
+    return Image.open(BytesIO(response.content)).convert("RGBA")
 
 
-async def vs_image(
+def vs_image(
     away_team_logo_url: HttpUrl, home_team_logo_url: HttpUrl, dimensions: Dimensions
 ) -> Image.Image:
-    team1_logo, team2_logo = await asyncio.gather(
-        fetch_image(away_team_logo_url), fetch_image(home_team_logo_url)
+    team1_logo, team2_logo = (
+        fetch_image(away_team_logo_url),
+        fetch_image(home_team_logo_url),
     )
 
-    # Resize team logos to fit half of the output width
-    output_width, output_height = dimensions.width, dimensions.height
-    resize_width = output_width // 2
-    resize_height = output_height
-    team1_logo = team1_logo.resize((resize_width, resize_height), Image.LANCZOS)
-    team2_logo = team2_logo.resize((resize_width, resize_height), Image.LANCZOS)
-
-    # Create output canvas
-    out_image = Image.new("RGBA", (output_width, output_height), (255, 255, 255, 255))
-
-    # Paste team logos side by side
-    out_image.paste(team1_logo, (0, 0), team1_logo)
-    out_image.paste(team2_logo, (resize_width, 0), team2_logo)
-
-    # Add "vs" text in the center
-    draw = ImageDraw.Draw(out_image)
-    font_size = output_height // 5
-    try:
-        # Use a simple font bundled with Pillow
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        # Fallback if the font is unavailable
-        font = ImageFont.load_default()
-
-    text = "vs"
-    text_width, text_height = draw.textsize(text, font=font)
-    text_x = (output_width - text_width) // 2
-    text_y = (output_height - text_height) // 2
-
-    draw.text((text_x, text_y), text, fill="black", font=font)
-
-    return out_image
+    return make_vs_image(team1_logo, team2_logo, dimensions)
