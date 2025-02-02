@@ -1,23 +1,24 @@
 import asyncio
-import os
-from dataclasses import Field, dataclass
-from io import BytesIO
+import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
 import environ
 import httpx
+import icecream
 import tomli
 from rich import print
 
-from krakenings_discord_bot import init, svcs_from
+from krakenings_discord_bot import init
 from krakenings_discord_bot.espn import (
+    Event,
     Schedule,
     TeamsModel,
     fetch_image,
     schedule_for_league,
 )
-from src.krakenings_discord_bot.bot import Bot
+from src.krakenings_discord_bot.bot import Bot, make_discord_payload
 
 
 @dataclass
@@ -43,11 +44,12 @@ class WebhookConfig:
 def main(ctx, local):
     ctx.obj = AppConfig(local=local)
     init()
+    icecream.install()
 
 
 @main.command()
 @click.option("--config-file", type=Path, default=Path("config.toml"))
-@click.option("--send", is_flag=True, type=Path, default=False)
+@click.option("--send", is_flag=True, type=bool, default=False)
 @click.argument("sport")
 @click.argument("league")
 @click.pass_obj
@@ -62,7 +64,27 @@ def schedule(obj: AppConfig, config_file: Path, sport: str, league: str, send: b
     else:
         schedule = schedule_for_league(sport, league)
 
-    print(schedule.events)
+    teams_to_check = config[sport]["teams"]
+
+    events: list[Event] = []
+    for event in schedule.events:
+        if any(t in event.get_team_abbreviations() for t in teams_to_check):
+            events.append(event)
+
+    payloads = [make_discord_payload(e) for e in events]
+    vs_images = [e.get_vs_image() for e in events]
+    if send:
+        for payload, vs_image in zip(payloads, vs_images):
+            response = httpx.post(
+                app_config.webhook_url,
+                data={"payload_json": json.dumps(payload)},
+                files={"vs-image": ("vs.png", vs_image, "image/png")},
+            )
+            print(response.text)
+            response.raise_for_status()
+    else:
+        print(payloads)
+    # print(schedule.events)
 
 
 @main.command()

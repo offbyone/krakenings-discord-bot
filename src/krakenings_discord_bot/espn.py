@@ -11,7 +11,7 @@ from PIL import Image
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic_extra_types.color import Color
 
-from .images import make_vs_image
+from .images import Dimensions, make_vs_image
 
 
 class Logo(BaseModel):
@@ -151,6 +151,23 @@ class Event(BaseModel):
     short_name: str = Field(alias="shortName")
     season: EventSeason
     competitions: list[Competition]
+
+    def get_team_abbreviations(self) -> list[str]:
+        return [
+            competitor.team.abbreviation
+            for competition in self.competitions
+            for competitor in competition.competitors
+        ]
+
+    def get_vs_image(self, dimensions: Dimensions = Dimensions(800, 400)) -> BytesIO:
+        away_team_logo_url = self.competitions[0].competitors[1].team.get_logo_url()
+        home_team_logo_url = self.competitions[0].competitors[0].team.get_logo_url()
+
+        image = vs_image(away_team_logo_url, home_team_logo_url, dimensions)
+        stream = BytesIO()
+        image.save(stream, format="PNG")
+        stream.seek(0)
+        return stream
 
 
 class Schedule(BaseModel):
